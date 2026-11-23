@@ -13,15 +13,19 @@ import (
 )
 
 type Store interface {
+	History(context.Context, string, int64, int) ([]inventory.Movement, error)
 	Move(context.Context, string, inventory.Command) (inventory.Receipt, bool, error)
 	Balance(context.Context, string) (int64, error)
 }
 
 const maxBody = 4096
 
-func New(store Store) http.Handler {
+func New(store Store, keys Keys) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	root := http.NewServeMux()
+	root.Handle("/v1/", keys.protect(mux))
+	mux.HandleFunc("GET /v1/stock/{sku}/movements", history(store))
+	root.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /v1/stock/{sku}", func(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +80,7 @@ func New(store Store) http.Handler {
 		}
 		writeJSON(w, status, receipt)
 	})
-	return mux
+	return root
 }
 
 func writeStoreError(w http.ResponseWriter, err error) {
