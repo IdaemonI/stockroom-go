@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,12 +30,31 @@ func main() {
 }
 
 func serve(ctx context.Context, addr string) error {
+	keys, err := httpapi.NewKeys(os.Getenv("STOCKROOM_READ_KEY"), os.Getenv("STOCKROOM_WRITE_KEY"))
+	if err != nil {
+		return err
+	}
+	var store httpapi.Store = inventory.NewStore()
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		db, err := sql.Open("postgres", dsn)
+		if err != nil {
+			return fmt.Errorf("open database: %w", err)
+		}
+		defer db.Close()
+		startup, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err = inventory.Migrate(startup, db)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("migrate database: %w", err)
+		}
+		store = inventory.NewPostgres(db)
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
 	server := &http.Server{
-		Handler:           httpapi.New(inventory.NewStore()),
+		Handler:           httpapi.New(store, keys),
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
