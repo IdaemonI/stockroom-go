@@ -8,6 +8,7 @@ import (
 	"math"
 	"regexp"
 	"sync"
+	"time"
 )
 
 const (
@@ -43,6 +44,8 @@ type Receipt struct {
 }
 
 type Store struct {
+	history  map[string][]Movement
+	nextID   int64
 	mu       sync.RWMutex
 	balances map[string]int64
 	receipts map[string]Receipt
@@ -50,6 +53,7 @@ type Store struct {
 
 func NewStore() *Store {
 	return &Store{
+		history:  make(map[string][]Movement),
 		balances: make(map[string]int64),
 		receipts: make(map[string]Receipt),
 	}
@@ -88,23 +92,16 @@ func (s *Store) Move(ctx context.Context, key string, cmd Command) (Receipt, boo
 		return prior, true, nil
 	}
 
-	balance := s.balances[cmd.SKU]
-	switch cmd.Kind {
-	case Issue:
-		if balance < cmd.Quantity {
-			return Receipt{}, false, ErrInsufficient
-		}
-		balance -= cmd.Quantity
-	case Receive:
-		if balance > math.MaxInt64-cmd.Quantity {
-			return Receipt{}, false, ErrOverflow
-		}
-		balance += cmd.Quantity
+	balance, err := nextBalance(s.balances[cmd.SKU], cmd)
+	if err != nil {
+		return Receipt{}, false, err
 	}
 
 	receipt := Receipt{RequestID: key, SKU: cmd.SKU, Kind: cmd.Kind, Quantity: cmd.Quantity, Balance: balance}
 	s.balances[cmd.SKU] = balance
 	s.receipts[key] = receipt
+	s.nextID++
+	s.history[cmd.SKU] = append(s.history[cmd.SKU], Movement{Receipt: receipt, ID: s.nextID, CreatedAt: time.Now().UTC()})
 	return receipt, false, nil
 }
 
@@ -121,5 +118,22 @@ func (s *Store) Balance(ctx context.Context, sku string) (int64, error) {
 	if !ok {
 		return 0, ErrNotFound
 	}
+	return balance, nil
+}
+
+func nextBalance(balance int64, cmd Command) (int64, error) {
+	switch cmd.Kind {
+	case Issue:
+		if balance < cmd.Quantity {
+			return 0, ErrInsufficient
+		}
+		balance -= cmd.Quantity
+	case Receive:
+		if balance > math.MaxInt64-cmd.Quantity {
+			return 0, ErrOverflow
+		}
+		balance += cmd.Quantity
+	}
+
 	return balance, nil
 }
