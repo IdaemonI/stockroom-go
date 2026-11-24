@@ -60,6 +60,18 @@ Every movement needs one `Idempotency-Key` header. Keys are unique across the wa
 
 Quantities range from 1 to 1,000,000 per movement. A SKU begins with an uppercase ASCII letter or digit and can contain uppercase letters, digits, underscores and hyphens, up to 32 characters. A successful issue that empties the shelf leaves a known SKU with balance zero.
 
+## Reconcile inventory
+
+Start the PostgreSQL-backed API once to apply the migrations. From another terminal with the same `DATABASE_URL`, run the audit worker:
+
+```sh
+go run ./cmd/reconcile -interval=30s
+```
+
+The worker needs SELECT access to the balance and movement tables. It scans immediately, then waits for the interval after each scan. A single SQL statement compares stored balances with receipts minus issues from the same committed snapshot. Each scan writes a JSON log line. A warning lists each affected SKU, its stored balance and its expected balance. A missing side appears as `null`. The worker leaves repairs to the operator. Failed scans log an error and retry after the interval. Ctrl-C or SIGTERM cancels a running scan or a wait.
+
+**Exercise.** In a disposable database, receive 5 units and issue 2 for one SKU. Predict the expected balance, increase only its stored balance by 1 in SQL, then run two scans. Explain why both warnings show the same discrepancy and why an ordinary concurrent API write produces none.
+
 ## Verify
 
 ```sh
@@ -70,7 +82,7 @@ go vet ./...
 Run the database tests against a development database using a role with permission to create schemas. Each test run creates and drops its own schema.
 
 ```sh
-STOCKROOM_TEST_DATABASE_URL="$DATABASE_URL" go test -race -count=1 ./internal/inventory
+STOCKROOM_TEST_DATABASE_URL="$DATABASE_URL" go test -race -count=1 ./...
 ```
 
 The concurrency tests cover simultaneous retries and buyers competing for the final unit. The HTTP tests exercise the same handlers served by the binary.
