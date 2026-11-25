@@ -2,6 +2,27 @@
 
 A Go HTTP service for a single warehouse. A scanner can retry a delivery after a timeout and receive the original receipt. Two pickers can request the last item at the same time, and only one gets it.
 
+## Run the warehouse demo
+
+From the repository root with Docker Compose v2 and Python 3 installed:
+
+```sh
+docker compose up --build -d
+python3 scripts/demo.py
+docker compose logs --tail=3 audit
+docker compose down
+```
+
+The demo receives two units, issues one, restarts the API, replays the delivery, then sends two concurrent picks for the last unit. Each run uses a fresh SKU. The script checks HTTP responses, the final balance and the ledger length. The database volume survives `docker compose down`. The API listens on localhost. The default keys and database password are public local-demo values. The two Go processes run as UID 65532 with a read-only filesystem and all Linux capabilities dropped. The demo database role also owns the schema. For deployment, provision separate migration, application and read-only audit roles and configure TLS.
+
+**Measured on 25 November 2026.** Two native runs with Go 1.24.4 and PostgreSQL 17.12 both returned the original receipt (HTTP 200, balance 2) after restarting the API, while the live balance was 1. Each race yielded one 201 and one 409, a final balance of 0 and exactly three movements. Two subsequent reconciliation scans found zero discrepancies. Formatting, vet and the race-enabled PostgreSQL integration suite passed. Compose configuration was validated locally. The GitHub Actions workflow also builds the containers and runs the same demo.
+
+**Interview practice**
+
+- Why can replay return balance 2 when the shelf holds 1? Follow the existing-receipt lookup in `Postgres.Move` and compare it to `Postgres.Balance`.
+- Which lock protects simultaneous retries, and which protects distinct picks for one SKU? Trace the advisory key lock and the row-level `FOR UPDATE` in acquisition order.
+- Could an audit observe half of a committed pick? Explain how the writer transaction and the audit's single SQL snapshot interact.
+
 ## Run locally
 
 Requires Go 1.22 or later. The default listener is `127.0.0.1:8080`. With no database configured, balances and receipts are kept in memory until the process exits.
