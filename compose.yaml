@@ -1,0 +1,40 @@
+x-runtime: &runtime
+  build: .
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  db:
+    image: postgres:17.7-bookworm@sha256:86e0b703649d7a792bd9243ee28afc9d8f7c6b2b5638077c9d6882d4d472bbfd
+    environment:
+      POSTGRES_USER: stockroom
+      POSTGRES_PASSWORD: local-demo-password
+      POSTGRES_DB: stockroom
+    volumes:
+      - stock:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stockroom -d stockroom"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  api:
+    <<: *runtime
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      DATABASE_URL: &dsn postgres://stockroom:local-demo-password@db/stockroom?sslmode=disable
+      STOCKROOM_READ_KEY: ${STOCKROOM_READ_KEY:-demo-reader}
+      STOCKROOM_WRITE_KEY: ${STOCKROOM_WRITE_KEY:-demo-writer}
+    depends_on:
+      db:
+        condition: service_healthy
+  audit:
+    <<: *runtime
+    entrypoint: ["/reconcile"]
+    command: ["-interval=30s"]
+    environment:
+      DATABASE_URL: *dsn
+    depends_on: [api]
+volumes:
+  stock:
